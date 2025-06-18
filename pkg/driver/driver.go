@@ -251,10 +251,13 @@ func (d *Driver) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolu
 		return nil, status.Error(codes.InvalidArgument, "target path is required")
 	}
 
-	// Check if volume exists
+	// Check if volume exists, if not, create it (ephemeral volume support)
 	volumePath := filepath.Join(d.basePath, req.VolumeId)
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
-		return nil, status.Error(codes.NotFound, "volume not found")
+		// Create the volume directory for ephemeral volume
+		if err := os.MkdirAll(volumePath, 0755); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to create volume directory: %v", err)
+		}
 	}
 
 	// Create target directory
