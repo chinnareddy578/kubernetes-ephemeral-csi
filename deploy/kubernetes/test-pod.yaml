@@ -6,7 +6,7 @@ spec:
   containers:
   - name: test-container
     image: busybox
-    command: ["/bin/sh", "-c", "while true; do echo 'Hello from ephemeral volume' > /data/test.txt; sleep 3600; done"]
+    command: ["/bin/sh", "-c", "while true; do echo 'Hello from ephemeral volume' >> /data/test.txt; sleep 5; done"]
     volumeMounts:
     - name: ephemeral-volume
       mountPath: /data
