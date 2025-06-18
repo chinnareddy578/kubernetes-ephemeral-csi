@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-ephemeral-volume
+spec:
+  containers:
+  - name: test-container
+    image: busybox
+    command: ["/bin/sh", "-c", "while true; do echo 'Hello from ephemeral volume' > /data/test.txt; sleep 3600; done"]
+    volumeMounts:
+    - name: ephemeral-volume
+      mountPath: /data
+  volumes:
+  - name: ephemeral-volume
+    csi:
+      driver: ephemeral.csi.local
+      volumeAttributes:
+        size: "1Gi" 

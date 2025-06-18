@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ephemeral-csi-node
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: ephemeral-csi-node
+  template:
+    metadata:
+      labels:
+        app: ephemeral-csi-node
+    spec:
+      containers:
+        - name: ephemeral-csi
+          image: ephemeral-csi:latest
+          args:
+            - --endpoint=$(CSI_ENDPOINT)
+            - --nodeid=$(NODE_ID)
+            - --v=5
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: host-dir
+              mountPath: /var/lib/ephemeral-csi
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/ephemeral.csi.local
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet/pods
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - ls -la /var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: host-dir
+          hostPath:
+            path: /var/lib/ephemeral-csi
+            type: DirectoryOrCreate
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/ephemeral.csi.local
+            type: DirectoryOrCreate
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory 

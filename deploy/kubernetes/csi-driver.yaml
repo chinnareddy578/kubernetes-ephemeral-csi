@@ -1,0 +1,239 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: ephemeral.csi.local
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  volumeLifecycleModes:
+    - Ephemeral
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ephemeral-csi
+provisioner: ephemeral.csi.local
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ephemeral-csi-controller-sa
+  namespace: kube-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ephemeral-csi-node-sa
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-csi-controller-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ephemeral-csi-controller-binding
+subjects:
+  - kind: ServiceAccount
+    name: ephemeral-csi-controller-sa
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: ephemeral-csi-controller-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ephemeral-csi-node-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ephemeral-csi-node-binding
+subjects:
+  - kind: ServiceAccount
+    name: ephemeral-csi-node-sa
+    namespace: kube-system
+roleRef:
+  kind: ClusterRole
+  name: ephemeral-csi-node-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ephemeral-csi-node
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: ephemeral-csi-node
+  template:
+    metadata:
+      labels:
+        app: ephemeral-csi-node
+    spec:
+      serviceAccountName: ephemeral-csi-node-sa
+      containers:
+        - name: ephemeral-csi
+          image: ephemeral-csi:latest
+          imagePullPolicy: Never
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--nodeid=$(NODE_ID)"
+            - "--v=5"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              memory: "50Mi"
+              cpu: "10m"
+            limits:
+              memory: "100Mi"
+              cpu: "100m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - csi-sanity -csi.endpoint=$(CSI_ENDPOINT) -csi.testnodevolumeattachlimit=false
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: host-dir
+              mountPath: /var/lib/ephemeral-csi
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/ephemeral.csi.local
+            - name: mountpoint-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+        - name: node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.10.0
+          args:
+            - "--v=5"
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(REG_PATH)"
+          env:
+            - name: ADDRESS
+              value: /var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            - name: REG_PATH
+              value: /var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/ephemeral.csi.local
+            - name: registration-dir
+              mountPath: /registration
+            - name: host-dir
+              mountPath: /var/lib/ephemeral-csi
+      volumes:
+        - name: host-dir
+          hostPath:
+            path: /var/lib/ephemeral-csi
+            type: DirectoryOrCreate
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/ephemeral.csi.local
+            type: DirectoryOrCreate
+        - name: mountpoint-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ephemeral-csi-controller
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ephemeral-csi-controller
+  template:
+    metadata:
+      labels:
+        app: ephemeral-csi-controller
+    spec:
+      serviceAccountName: ephemeral-csi-controller-sa
+      containers:
+        - name: ephemeral-csi
+          image: ephemeral-csi:latest
+          imagePullPolicy: Never
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--v=5"
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              memory: "50Mi"
+              cpu: "10m"
+            limits:
+              memory: "100Mi"
+              cpu: "100m"
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - ls -la /var/lib/kubelet/plugins/ephemeral.csi.local/csi.sock
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/ephemeral.csi.local
+      volumes:
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/ephemeral.csi.local
+            type: DirectoryOrCreate 
